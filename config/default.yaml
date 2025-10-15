@@ -1,17 +1,123 @@
+project:
+  name: "UWSS Local Dev"
+  schema_version: "1.0"
+  description: "Universal, config-driven web scraping & sequencing"
+
+pipeline:
+  stages:
+    - discover
+    - fetch
+    - extract
+    - sequence
+    - score
+    - export
+  # Cho phép bật/tắt từng bước nếu cần
+  enabled:
+    discover: true
+    fetch: true
+    extract: true
+    sequence: true
+    score: true
+    export: true
+
 domain:
-  keywords: []
-  boost: []
+  keywords:
+    - "reinforced concrete corrosion"
+    - "chloride diffusion test"
+  boost:
+    - "dataset"
+    - "supplementary"
+    - "experimental"
+    - "time series"
+
 sources:
-  openalex:
-    enabled: true
-    max_results: 10
+  # Danh sách adapters theo tên plugin + options
+  - name: openalex
+    plugin: openalex
+    options:
+      max_results: 50
+      search_fields: ["title", "abstract"]  # có thể mở rộng: concepts, venue...
+      per_page: 25
+      timeout: 30
+  # ví dụ sau này thêm:
+  # - name: crossref
+  #   plugin: crossref
+  #   options: {...}
+  # - name: fhwa
+  #   plugin: generic_site
+  #   options:
+  #     seeds: ["https://highways.dot.gov/bridge/reports"]
+  #     include_patterns: ["\\.pdf$", "\\/reports\\/" ]
+  #     depth: 1
+
+files:
+  types: ["pdf", "html", "docx", "txt", "csv"]
+  max_bytes: 20000000
+
+extraction:
+  profiles:
+    - name: default_pdf
+      applies_to: ["pdf"]
+      steps:
+        - plugin: pdf_text_basic         # placeholder; sau ta map plugin này
+          options: { laparams: null }
+        # - plugin: table_detector        # sau
+        # - plugin: ocr_tesseract        # sau (scan)
+    - name: default_html
+      applies_to: ["html"]
+      steps:
+        - plugin: html_readability
+          options: { drop_tables: false }
+
+sequence:
+  detectors:
+    - plugin: seq_table_regex
+      options:
+        time_headers: ["time", "month", "age", "day", "cycle"]
+        unit_dictionary:
+          half_cell_potential: ["mV", "mV vs Cu/CuSO4"]
+          mass_loss: ["%"]
+          chloride_content: ["%", "ppm"]
+          crack_width: ["mm", "μm"]
+  min_points: 3
+
+scoring:
+  strategies:
+    - plugin: keyword_count
+      options:
+        weight_keyword: 0.1
+        weight_boost: 0.05
+        threshold: 0.45
+    # - plugin: embedding_similarity   # để sau
+    #   options: {...}
+
+export:
+  format: "jsonl"
+  filename: "uwss_export.jsonl"
+  include_fields:
+    - "id"
+    - "title"
+    - "year"
+    - "venue"
+    - "doi"
+    - "source_url"
+    - "files"
+    - "score"
+    - "kept"
+    - "sequences"
+    - "provenance"
+
 storage:
   database: "sqlite:///data/uwss.db"
   raw_dir: "data/raw"
   text_dir: "data/text"
   out_dir: "data/out"
+  # sau này có thể thêm: blob_store: s3://...
+
 runtime:
-  user_agent: "UWSS/1.0"
+  user_agent: "UWSS/1.0 (+research; contact: you@example.com)"
   log_level: "INFO"
   respect_robots: true
   retries: 2
+  request_delay_s: 0.5
+  max_concurrent: 3

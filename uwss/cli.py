@@ -1,9 +1,12 @@
 from __future__ import annotations
 import argparse
+import hashlib
 import json
 import time
+
 from .config_loader import load_config
 from .logger import get_logger
+from .core.discovery import discover_openalex
 from .core.storage import DB
 
 
@@ -57,9 +60,88 @@ def cmd_db_peek(cfg: dict, limit: int = 3):
         )
 
 
+def _mk_id(title: str, year: int) -> str:
+    base = f"{(title or '').strip()}_{year or 0}"
+    return hashlib.sha1(base.encode("utf-8")).hexdigest()
+
+
+def _get_openalex_opts(cfg: dict) -> dict:
+    """
+    Đọc cấu hình OpenAlex cho cả 2 kiểu:
+    - cũ: cfg["sources"]["openalex"]["max_results"]
+    - mới (plugin list): cfg["sources"] = [{name/plugin: "openalex", options: {...}}]
+    """
+    srcs = cfg.get("sources", {})
+    # kiểu cũ: dict
+    if isinstance(srcs, dict):
+        oa = srcs.get("openalex", {}) or {}
+        return {
+            "max_results": int(oa.get("max_results", 50)),
+            "per_page": int(oa.get("per_page", 25)),
+            "timeout": int(oa.get("timeout", 30)),
+        }
+    # kiểu mới: list plugin
+    if isinstance(srcs, list):
+        for s in srcs:
+            if s.get("plugin") == "openalex" or s.get("name") == "openalex":
+                opts = s.get("options", {}) or {}
+                return {
+                    "max_results": int(opts.get("max_results", 50)),
+                    "per_page": int(opts.get("per_page", 25)),
+                    "timeout": int(opts.get("timeout", 30)),
+                }
+    # mặc định an toàn
+    return {"max_results": 50, "per_page": 25, "timeout": 30}
+
+
+def cmd_discover(cfg: dict):
+    log = get_logger("uwss.discover", cfg["runtime"]["log_level"])
+    kw = cfg.get("domain", {}).get("keywords", []) or []
+    oa = _get_openalex_opts(cfg)
+    maxn, per_page, timeout = oa["max_results"], oa["per_page"], oa["timeout"]
+    log.info(
+        "discovering from OpenAlex: keywords=%s max=%s per_page=%s timeout=%s",
+        kw,
+        maxn,
+        per_page,
+        timeout,
+    )
+
+    db = DB(cfg["storage"]["database"])
+    count = 0
+
+    for w in discover_openalex(
+        kw, max_results=maxn, per_page=per_page, timeout=timeout
+    ):
+        host = w.get("host_venue") or {}
+        primary = w.get("primary_location") or {}
+        row = {
+            "id": w.get("id")
+            or _mk_id(w.get("title") or "", w.get("publication_year") or 0),
+            "title": (w.get("title") or "").strip(),
+            "year": w.get("publication_year") or 0,
+            "venue": host.get("display_name") or "",
+            "doi": w.get("doi") or "",
+            "source_url": primary.get("landing_page_url") or "",
+            "pdf_path": "",
+            "html_path": "",
+            "text_path": "",
+            "score": 0.0,
+            "kept": 0,
+            # lưu raw metadata để dùng sau (fetch/unpaywall/sequence)
+            "meta_json": json.dumps(w, ensure_ascii=False),
+        }
+        db.upsert_item(row)
+        count += 1
+
+    log.info("discovered %d records into DB %s", count, cfg["storage"]["database"])
+
+
 def main():
     ap = argparse.ArgumentParser(prog="uwss", description="UWSS minimal CLI")
-    ap.add_argument("cmd", choices=["doctor", "config", "db-init", "db-peek"])
+    ap.add_argument(
+        "cmd", choices=["doctor", "config", "db-init", "db-peek", "discover"]
+    )
     ap.add_argument("--config", default="config/default.yaml")
     ap.add_argument(
         "--show", action="store_true", help="print config (with 'config' cmd)"
@@ -79,6 +161,8 @@ def main():
         cmd_db_init(cfg)
     elif args.cmd == "db-peek":
         cmd_db_peek(cfg, args.limit)
+    elif args.cmd == "discover":
+        cmd_discover(cfg)
 
 
 if __name__ == "__main__":

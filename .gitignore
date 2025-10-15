@@ -12,3 +12,4 @@ data/logs/
 dist/
 build/
 pytest_cache/
+/.idea/
