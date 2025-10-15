@@ -8,6 +8,7 @@ from .config_loader import load_config
 from .logger import get_logger
 from .core.discovery import discover_openalex
 from .core.storage import DB
+from .core.fetching import fetch_one
 
 
 def cmd_doctor(cfg: dict):
@@ -137,17 +138,48 @@ def cmd_discover(cfg: dict):
     log.info("discovered %d records into DB %s", count, cfg["storage"]["database"])
 
 
+def cmd_fetch(cfg: dict, limit: int = 20):
+    log = get_logger("uwss.fetch", cfg["runtime"]["log_level"])
+    db = DB(cfg["storage"]["database"])
+    ua = cfg["runtime"]["user_agent"]
+    raw_dir = cfg["storage"]["raw_dir"]
+    # NEW: đọc cờ ssl_verify (mặc định True nếu không có)
+    verify_ssl = cfg.get("runtime", {}).get("ssl_verify", True)
+
+    done = 0
+    for row in db.iter_items():
+        if done >= limit:
+            break
+        if row.get("pdf_path") or row.get("html_path"):
+            continue
+        new_row = fetch_one(
+            db, row, raw_dir=raw_dir, ua=ua, verify_ssl=verify_ssl
+        )  # <-- truyền flag
+        got = (
+            "pdf"
+            if new_row.get("pdf_path")
+            else ("html" if new_row.get("html_path") else "none")
+        )
+        log.info("fetched %s → %s", row["id"], got)
+        done += 1
+
+    log.info("fetch finished: %d items attempted", done)
+
+
 def main():
     ap = argparse.ArgumentParser(prog="uwss", description="UWSS minimal CLI")
     ap.add_argument(
-        "cmd", choices=["doctor", "config", "db-init", "db-peek", "discover"]
+        "cmd", choices=["doctor", "config", "db-init", "db-peek", "discover", "fetch"]
     )
     ap.add_argument("--config", default="config/default.yaml")
     ap.add_argument(
         "--show", action="store_true", help="print config (with 'config' cmd)"
     )
     ap.add_argument(
-        "--limit", type=int, default=3, help="rows to peek (with 'db-peek')"
+        "--limit",
+        type=int,
+        default=3,
+        help="rows to peek (with 'db-peek') and items to fetch (with 'fetch')",
     )
     args = ap.parse_args()
 
@@ -163,6 +195,9 @@ def main():
         cmd_db_peek(cfg, args.limit)
     elif args.cmd == "discover":
         cmd_discover(cfg)
+    elif args.cmd == "fetch":
+        # dùng args.limit cho fetch, mặc định ở trên mình để 3; bạn có thể set --limit 10 khi chạy
+        cmd_fetch(cfg, args.limit)
 
 
 if __name__ == "__main__":
