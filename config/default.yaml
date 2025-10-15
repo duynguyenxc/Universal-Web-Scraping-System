@@ -1,0 +1,17 @@
+domain:
+  keywords: []
+  boost: []
+sources:
+  openalex:
+    enabled: true
+    max_results: 10
+storage:
+  database: "sqlite:///data/uwss.db"
+  raw_dir: "data/raw"
+  text_dir: "data/text"
+  out_dir: "data/out"
+runtime:
+  user_agent: "UWSS/1.0"
+  log_level: "INFO"
+  respect_robots: true
+  retries: 2
