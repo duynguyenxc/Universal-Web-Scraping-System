@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # (Tuỳ chọn) chạy pre-commit nếu bạn đã cấu hình .pre-commit-config.yaml
+      - name: Run pre-commit (lint/format)
+        run: |
+          pre-commit run --all-files || (git diff --quiet || (echo "::error::pre-commit fixed files, please commit them"; git diff; exit 1))
+
+      # Smoke test CLI không chạm network (chỉ 'doctor')
+      - name: Smoke test CLI
+        run: |
+          python -m uwss doctor --config config/default.yaml
+
+      # Unit tests (nếu có)
+      - name: Run tests
+        run: |
+          pytest -q

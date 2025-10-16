@@ -1,4 +1,14 @@
+# core
 pyyaml
 requests
+
+# test & tooling
 pytest
 pre-commit
+
+# extract (PDF/HTML -> text)
+pymupdf>=1.24,<1.26
+trafilatura>=1.8,<2.0
+lxml>=5.2,<6.0
+htmldate>=1.5,<2.0
+charset-normalizer>=3.3,<4.0
