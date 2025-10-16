@@ -39,6 +39,8 @@ sources:
       search_fields: ["title", "abstract"]  # có thể mở rộng: concepts, venue...
       per_page: 25
       timeout: 30
+      filter_oa: true
+      min_year: 2000
   # ví dụ sau này thêm:
   # - name: crossref
   #   plugin: crossref
@@ -122,3 +124,4 @@ runtime:
   request_delay_s: 0.5
   max_concurrent: 3
   ssl_verify: true
+

@@ -143,27 +143,35 @@ def cmd_fetch(cfg: dict, limit: int = 20):
     db = DB(cfg["storage"]["database"])
     ua = cfg["runtime"]["user_agent"]
     raw_dir = cfg["storage"]["raw_dir"]
-    # NEW: đọc cờ ssl_verify (mặc định True nếu không có)
     verify_ssl = cfg.get("runtime", {}).get("ssl_verify", True)
 
     done = 0
+    pdfs = htmls = none = 0
+
     for row in db.iter_items():
         if done >= limit:
             break
+        # chỉ fetch những bản chưa có file
         if row.get("pdf_path") or row.get("html_path"):
             continue
-        new_row = fetch_one(
-            db, row, raw_dir=raw_dir, ua=ua, verify_ssl=verify_ssl
-        )  # <-- truyền flag
+        new_row = fetch_one(db, row, raw_dir=raw_dir, ua=ua, verify_ssl=verify_ssl)
         got = (
             "pdf"
             if new_row.get("pdf_path")
             else ("html" if new_row.get("html_path") else "none")
         )
+        if got == "pdf":
+            pdfs += 1
+        elif got == "html":
+            htmls += 1
+        else:
+            none += 1
         log.info("fetched %s → %s", row["id"], got)
         done += 1
 
-    log.info("fetch finished: %d items attempted", done)
+    log.info(
+        "fetch finished: %d attempted | pdf=%d html=%d none=%d", done, pdfs, htmls, none
+    )
 
 
 def main():
@@ -196,7 +204,6 @@ def main():
     elif args.cmd == "discover":
         cmd_discover(cfg)
     elif args.cmd == "fetch":
-        # dùng args.limit cho fetch, mặc định ở trên mình để 3; bạn có thể set --limit 10 khi chạy
         cmd_fetch(cfg, args.limit)
 
 
