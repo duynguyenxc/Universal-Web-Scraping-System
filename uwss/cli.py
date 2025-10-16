@@ -9,6 +9,7 @@ from .logger import get_logger
 from .core.discovery import discover_openalex
 from .core.storage import DB
 from .core.fetching import fetch_one
+from .core.parsing import extract_one
 
 
 # ---------------------------
@@ -22,11 +23,6 @@ def _mk_id(title: str, year: int) -> str:
 
 
 def _get_openalex_opts(cfg: dict) -> dict:
-    """
-    Đọc cấu hình OpenAlex cho cả 2 kiểu:
-    - cũ (dict): cfg["sources"]["openalex"]["..."]
-    - mới (list plugin): cfg["sources"] = [{name/plugin: "openalex", options: {...}}]
-    """
     srcs = cfg.get("sources", {})
 
     def _mk(d: dict) -> dict:
@@ -39,19 +35,16 @@ def _get_openalex_opts(cfg: dict) -> dict:
             "mailto": d.get("mailto", None),
         }
 
-    # legacy dict style
     if isinstance(srcs, dict):
         oa = srcs.get("openalex", {}) or {}
         return _mk(oa)
 
-    # plugin list style
     if isinstance(srcs, list):
         for s in srcs:
             if s.get("plugin") == "openalex" or s.get("name") == "openalex":
                 opts = s.get("options", {}) or {}
                 return _mk(opts)
 
-    # defaults
     return {
         "max_results": 50,
         "per_page": 25,
@@ -63,16 +56,6 @@ def _get_openalex_opts(cfg: dict) -> dict:
 
 
 def _get_unpaywall_opts(cfg: dict) -> dict:
-    """
-    Đọc cấu hình Unpaywall từ schema plugin-list:
-    sources:
-      - name: unpaywall
-        plugin: unpaywall
-        options:
-          email: "you@domain"
-          timeout: 20
-          prefer_best: true
-    """
     srcs = cfg.get("sources", [])
     if isinstance(srcs, list):
         for s in srcs:
@@ -109,7 +92,6 @@ def cmd_config(cfg: dict, show: bool):
 
 def cmd_db_init(cfg: dict):
     db = DB(cfg["storage"]["database"])
-    # chèn 1 record mẫu để xác nhận schema/ghi chép hoạt động
     sample = {
         "id": f"sample-{int(time.time())}",
         "title": "Sample placeholder",
@@ -190,7 +172,6 @@ def cmd_discover(cfg: dict):
             "text_path": "",
             "score": 0.0,
             "kept": 0,
-            # lưu raw metadata để dùng sau (fetch/adapters/sequence)
             "meta_json": json.dumps(w, ensure_ascii=False),
         }
         db.upsert_item(row)
@@ -214,7 +195,6 @@ def cmd_fetch(cfg: dict, limit: int = 20):
     for row in db.iter_items():
         if done >= limit:
             break
-        # chỉ fetch những bản chưa có file
         if row.get("pdf_path") or row.get("html_path"):
             continue
 
@@ -249,6 +229,31 @@ def cmd_fetch(cfg: dict, limit: int = 20):
     )
 
 
+def cmd_extract(cfg: dict, limit: int = 20, max_pdf_pages: int | None = None):
+    log = get_logger("uwss.extract", cfg["runtime"]["log_level"])
+    db = DB(cfg["storage"]["database"])
+    text_dir = cfg["storage"]["text_dir"]
+
+    done = ok = skip = 0
+    for row in db.iter_items():
+        if done >= limit:
+            break
+        # chỉ extract những bản chưa có text
+        if row.get("text_path"):
+            skip += 1
+            continue
+        if not (row.get("pdf_path") or row.get("html_path")):
+            skip += 1
+            continue
+
+        new_row = extract_one(db, row, text_dir=text_dir, max_pdf_pages=max_pdf_pages)
+        if new_row.get("text_path"):
+            ok += 1
+        done += 1
+
+    log.info("extract finished: attempted=%d ok=%d skipped=%d", done, ok, skip)
+
+
 # ---------------------------
 # Entrypoint
 # ---------------------------
@@ -257,7 +262,16 @@ def cmd_fetch(cfg: dict, limit: int = 20):
 def main():
     ap = argparse.ArgumentParser(prog="uwss", description="UWSS minimal CLI")
     ap.add_argument(
-        "cmd", choices=["doctor", "config", "db-init", "db-peek", "discover", "fetch"]
+        "cmd",
+        choices=[
+            "doctor",
+            "config",
+            "db-init",
+            "db-peek",
+            "discover",
+            "fetch",
+            "extract",
+        ],
     )
     ap.add_argument("--config", default="config/default.yaml")
     ap.add_argument(
@@ -267,11 +281,18 @@ def main():
         "--limit",
         type=int,
         default=3,
-        help="rows to peek (with 'db-peek') or items to fetch (with 'fetch')",
+        help="rows to peek (with 'db-peek') or items to fetch/extract",
+    )
+    ap.add_argument(
+        "--max-pdf-pages",
+        type=int,
+        default=0,
+        help="limit pages per PDF when extracting; 0 means all",
     )
     args = ap.parse_args()
 
     cfg = load_config(args.config)
+    max_pdf_pages = None if args.max_pdf_pages == 0 else args.max_pdf_pages
 
     if args.cmd == "doctor":
         cmd_doctor(cfg)
@@ -285,6 +306,8 @@ def main():
         cmd_discover(cfg)
     elif args.cmd == "fetch":
         cmd_fetch(cfg, args.limit)
+    elif args.cmd == "extract":
+        cmd_extract(cfg, args.limit, max_pdf_pages=max_pdf_pages)
 
 
 if __name__ == "__main__":
