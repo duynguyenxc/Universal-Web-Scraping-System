@@ -4,7 +4,7 @@ import os
 import json
 import time
 import re
-from typing import Optional
+from typing import Optional, List
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -13,7 +13,7 @@ import certifi
 
 from .storage import DB
 from uwss.schemas.location import Location
-from uwss.registry import locations_from_meta
+from uwss.registry import locations_from_meta, enrich_locations_with_unpaywall
 
 SAFE_CHARS = re.compile(r"[^a-zA-Z0-9._-]+")
 
@@ -42,11 +42,9 @@ def _make_session(ua: str, retries: int = 3, backoff: float = 0.5) -> requests.S
 
 
 def _is_real_pdf(path: str) -> bool:
-    """Xác minh file thực sự là PDF (magic header %PDF)."""
     try:
         with open(path, "rb") as f:
-            head = f.read(4)
-        return head == b"%PDF"
+            return f.read(4) == b"%PDF"
     except OSError:
         return False
 
@@ -55,13 +53,13 @@ def _head_content_type(
     sess: requests.Session, url: str, timeout: int, verify_ssl: bool
 ) -> str:
     try:
-        resp = sess.head(
+        r = sess.head(
             url,
             timeout=timeout,
             allow_redirects=True,
             verify=(certifi.where() if verify_ssl else False),
         )
-        return (resp.headers.get("Content-Type") or "").lower()
+        return (r.headers.get("Content-Type") or "").lower()
     except requests.RequestException:
         return ""
 
@@ -83,13 +81,13 @@ def _download(
                 return False
             total = 0
             with open(out_path, "wb") as f:
-                for chunk in r.iter_content(chunk_size=8192):
+                for chunk in r.iter_content(8192):
                     if not chunk:
                         continue
                     f.write(chunk)
                     total += len(chunk)
             return total > 0
-    except requests.exceptions.RequestException:
+    except requests.RequestException:
         return False
 
 
@@ -102,9 +100,7 @@ def _try_pdf(
     ctype = _head_content_type(
         sess, loc.pdf_url, timeout=timeout, verify_ssl=verify_ssl
     )
-    is_pdf_like = (
-        ("application/pdf" in ctype) if ctype else True
-    )  # nếu HEAD không trả type, vẫn thử
+    is_pdf_like = ("application/pdf" in ctype) if ctype else True
     if is_pdf_like and _download(
         sess, loc.pdf_url, pdf_path, timeout=timeout, verify_ssl=verify_ssl
     ):
@@ -136,19 +132,33 @@ def fetch_one(
     ua: str,
     verify_ssl: bool = True,
     timeout: int = 30,
+    unpaywall_email: Optional[str] = None,
+    unpaywall_timeout: int = 20,
+    unpaywall_prefer_best: bool = True,
 ) -> dict:
     """
     Universal fetch:
-    - Adapter (registry) chuyển meta → List[Location] (đa nguồn)
-    - Ưu tiên PDF (HEAD + %PDF), fallback HTML
-    - Giữ retry/certifi; cập nhật DB nếu có file
+    - Map meta nguồn → List[Location] (OpenAlex, v.v.)
+    - Enrich bằng Unpaywall nếu có DOI + email
+    - Ưu tiên PDF, fallback HTML
     """
     try:
         meta = json.loads(item.get("meta_json") or "{}")
     except Exception:
         meta = {}
 
-    locs = locations_from_meta(meta)  # <— adapter theo nguồn
+    locs: List[Location] = locations_from_meta(meta)
+
+    # Enrich bằng Unpaywall (nếu được cấu hình)
+    if unpaywall_email:
+        locs = enrich_locations_with_unpaywall(
+            locs,
+            meta,
+            email=unpaywall_email,
+            timeout=unpaywall_timeout,
+            prefer_best=unpaywall_prefer_best,
+        )
+
     safe_id = _safe_name(item["id"])
     base_path = os.path.join(raw_dir, safe_id)
     updated = dict(item)
@@ -157,24 +167,20 @@ def fetch_one(
     got_pdf = False
     got_html = False
 
-    # vòng 1: thử PDF theo thứ tự ưu tiên
+    # Vòng 1: PDF
     for loc in locs:
-        pdf_path = _try_pdf(
-            sess, loc, base_path, timeout=timeout, verify_ssl=verify_ssl
-        )
-        if pdf_path:
-            updated["pdf_path"] = pdf_path
+        p = _try_pdf(sess, loc, base_path, timeout=timeout, verify_ssl=verify_ssl)
+        if p:
+            updated["pdf_path"] = p
             got_pdf = True
             break
 
-    # vòng 2: nếu chưa có PDF, thử HTML (lấy lần đầu tiên thành công)
+    # Vòng 2: HTML
     if not got_pdf:
         for loc in locs:
-            html_path = _try_html(
-                sess, loc, base_path, timeout=timeout, verify_ssl=verify_ssl
-            )
-            if html_path:
-                updated["html_path"] = html_path
+            h = _try_html(sess, loc, base_path, timeout=timeout, verify_ssl=verify_ssl)
+            if h:
+                updated["html_path"] = h
                 got_html = True
                 break
 
