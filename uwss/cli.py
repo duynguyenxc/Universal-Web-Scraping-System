@@ -13,6 +13,7 @@ from .core.fetching import fetch_one
 from .core.scoring import score_db
 from .core.exporter import export_rows
 
+
 # ===== Helpers =====
 
 
@@ -320,23 +321,32 @@ def cmd_extract(cfg: dict, limit: int = 50):
     )
 
 
-# ==== New: scoring / export / stats ====
-
-
 def cmd_score(cfg: dict):
-    db = DB(cfg["storage"]["database"])
     log_level = cfg["runtime"]["log_level"]
+    db = DB(cfg["storage"]["database"])
     stats = score_db(db, cfg, log_level=log_level)
     print(
         f"Scoring done: total={stats['total']} updated={stats['updated']} kept={stats['kept']}"
     )
 
 
-def cmd_export(cfg: dict, fmt: str = "csv", only_kept: bool = False):
+def cmd_export(
+    cfg: dict,
+    fmt: str = "csv",
+    only_kept: bool = False,
+    only_with_files: bool = False,
+):
     db = DB(cfg["storage"]["database"])
     out_dir = cfg["storage"]["out_dir"]
     log_level = cfg["runtime"]["log_level"]
-    path = export_rows(db, out_dir, fmt=fmt, only_kept=only_kept, log_level=log_level)
+    path = export_rows(
+        db,
+        out_dir,
+        fmt=fmt,
+        only_kept=only_kept,
+        log_level=log_level,
+        only_with_files=only_with_files,
+    )
     print(f"Exported -> {path}")
 
 
@@ -402,6 +412,11 @@ def main():
         action="store_true",
         help="export only kept=1 rows (for 'export')",
     )
+    ap.add_argument(
+        "--only-with-files",
+        action="store_true",
+        help="export only rows that have pdf_path or html_path",
+    )
 
     args = ap.parse_args()
     cfg = load_config(args.config)
@@ -423,7 +438,12 @@ def main():
     elif args.cmd == "score":
         cmd_score(cfg)
     elif args.cmd == "export":
-        cmd_export(cfg, fmt=args.fmt, only_kept=args.only_kept)
+        cmd_export(
+            cfg,
+            fmt=args.fmt,
+            only_kept=args.only_kept,
+            only_with_files=args.only_with_files,
+        )
     elif args.cmd == "db-stats":
         cmd_db_stats(cfg)
 
