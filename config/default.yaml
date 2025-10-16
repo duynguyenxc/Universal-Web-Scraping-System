@@ -42,11 +42,11 @@ sources:
       filter_oa: true
       min_year: 2000
   - name: unpaywall
-      plugin: unpaywall
-      options:
-        email: "ddnguyen@go.olemiss.edu"
-        timeout: 20
-        prefer_best: true
+    plugin: unpaywall
+    options:
+      email: "ddnguyen@go.olemiss.edu"
+      timeout: 20
+      prefer_best: true
   # ví dụ sau này thêm:
   # - name: crossref
   #   plugin: crossref
